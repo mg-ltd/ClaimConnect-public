@@ -40,8 +40,7 @@ neutral error.
   OpenFreeMap public service; no incident details, photographs or
   identifiers are sent. The Privacy screen states this.
 - The Data safety declaration must cover approximate-location
-  transmission to the tile service (folded into the existing redo item
-  in `docs/design/ROADMAP.md`).
+  transmission to the tile service.
 - Attribution is a licence obligation, not decoration: map data
   © OpenStreetMap contributors (ODbL), tiles via © OpenMapTiles /
   OpenFreeMap. It is drawn on every real snapshot and credited in-app.

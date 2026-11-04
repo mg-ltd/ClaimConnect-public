@@ -1,5 +1,7 @@
 # Submission form answers (DRAFT — paste into the form before 4 Nov 21:00 ET)
 
+Submitted by Melosome Group Ltd. Proprietary — see [LICENSE](../../LICENSE).
+
 ## 1. Project description — what problem does it resolve?
 
 After a vehicle collision, drivers must produce an accurate, complete,

@@ -1,5 +1,7 @@
 # Submission draft (DRAFT — edit before 4 Nov 21:00 ET)
 
+Submitted by Melosome Group Ltd. Proprietary — see [LICENSE](../../LICENSE).
+
 ## Title
 
 ClaimConnect: guided incident evidence with a verifiable AI check

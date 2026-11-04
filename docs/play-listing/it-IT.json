@@ -1,7 +1,0 @@
-{
-  "locale": "it-IT",
-  "title": "ClaimConnect Prove",
-  "short_description": "Registra incidenti offline e crea pacchetti PDF.",
-  "full_description": "ClaimConnect ti aiuta a registrare un incidente stradale mentre i dettagli sono freschi e a trasformarlo in un chiaro pacchetto di prove PDF.\n\nCOME FUNZIONA\n- Verifica che tutti siano al sicuro, poi segui la guida: veicolo, conducente, data e ora, luogo, persone coinvolte.\n- Aggiungi fino a 10 fotografie con didascalie. Gli originali sono verificati e conservati intatti.\n- Il salvataggio automatico protegge la bozza in caso di interruzioni. Riaprila quando vuoi.\n- Rileggi tutto, genera il PDF e visualizzalo, salvalo o condividilo tu stesso.\n\nNUMERI DI EMERGENZA\nI numeri di emergenza standard si adattano al tuo paese (Regno Unito, Stati Uniti, Germania, Francia e Spagna, con il 112 altrove). Puoi anche salvare i tuoi contatti personali.\n\nPRIVACY\n- Tutto resta cifrato sul tuo dispositivo. Nessun account, nessun server, nessuna statistica.\n- Nulla lascia l'applicazione senza la tua azione.\n- Nessuna connessione richiesta, dalla registrazione al PDF.\n\nNOTA BENE\nClaimConnect organizza le informazioni fornite dall'utente. Non presenta reclami, non decide le colpe e non certifica le prove. I controlli IA opzionali sono suggerimenti segnalati e non alterano mai il tuo fascicolo. Chiama prima i soccorsi in caso di feriti.",
-  "whats_new": "Versione iniziale: registrazione guidata, foto con didascalie, bozze automatiche e pacchetti PDF con anteprima, salvataggio e condivisione."
-}

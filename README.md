@@ -35,8 +35,10 @@ Filesystem writes use a temporary encrypted file, fsync and rename before a Room
 
 Preview/share creates a plaintext PDF in the app-private cache with a scoped FileProvider URI and read grant. Temporary copies older than 24 hours are removed on a later app start. They are also removed when an incident is edited or deleted. External copies remain under the user's and recipient's control. A system camera app receives a temporary camera URI; its plaintext capture file remains in private cache until successful encrypted import, cancellation or discard. Pending captures are associated with their incident and can be retried after restart. A stable capture ID prevents duplication if a process ends after import but before cache cleanup. No routine logs or analytics collect incident data. Storage is capped at 200 MB plus transient capture/share cache.
 
-## Verification and release
+## Verification
 
-See [pilot release checklist](docs/PILOT_RELEASE.md) and [manual device verification](docs/DEVICE_QA.md). Automated tests cover validation, stale packs, original hashes, ciphertext substitution/tampering, reopening encrypted records, ten-photo PDF rendering, saving, deletion and the Compose journey. Physical-device camera, process-kill, reboot, document provider and low-storage checks remain release gates.
+Automated tests cover validation, stale packs, original hashes, ciphertext substitution/tampering, reopening encrypted records, ten-photo PDF rendering, saving, deletion and the Compose journey. Physical-device camera, process-kill, reboot, document provider and low-storage checks remain release gates.
 
-The app's pilot support copy refers to the pilot organiser. Replace it with the approved support contact and publish a privacy page before wider distribution. Confirm ownership of the application ID `app.melosome.claimconnect` and increment `versionCode` for every Play upload. Developer-account access, upload-key custody and Play release are separate deployment steps.
+## Licence
+
+Copyright (c) 2026 Melosome Group Ltd. All rights reserved. This hackathon submission is proprietary to Melosome Group Ltd — see [LICENSE](LICENSE). Access to this repository does not grant any reuse rights.
