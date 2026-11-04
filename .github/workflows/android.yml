@@ -1,0 +1,15 @@
+name: Android verification
+
+# Keep the original registered workflow path usable without duplicating the automatic
+# pull-request runs owned by android-ci.yml (trusted main is owned by android-release.yml).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    uses: ./.github/workflows/android-ci.yml
+    permissions:
+      contents: read

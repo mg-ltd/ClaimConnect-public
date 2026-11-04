@@ -1,0 +1,121 @@
+# ---- Gradle / build output ----
+.gradle/
+**/build/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/**/build/
+.kotlin/
+kotlin-js-store/
+.externalNativeBuild/
+.cxx/
+/captures/
+
+# ---- Release artefacts (build in CI from a tag, never commit) ----
+/app/release/
+/app/debug/
+*.apk
+*.aab
+*.ap_
+*.dex
+*.aar
+*.so.debug
+output-metadata.json
+mapping.txt
+
+# ---- Signing material and secrets ----
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+keystore.properties
+signing.properties
+*.gpg
+.env
+.env.*
+!.env.example
+secrets.properties
+service-account*.json
+google-services.json
+play-credentials*.json
+
+# ---- Local configuration ----
+local.properties
+*.local
+
+# ---- JVM / Kotlin / Java ----
+*.class
+*.log
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
+*.war
+*.ear
+hs_err_pid*
+replay_pid*
+*.hprof
+*.iml
+*.ipr
+*.iws
+out/
+
+# ---- Android Studio / IntelliJ (share only project-level settings) ----
+.idea/caches/
+.idea/libraries/
+.idea/modules.xml
+.idea/workspace.xml
+.idea/navEditor.xml
+.idea/assetWizardSettings.xml
+.idea/dictionaries/
+.idea/shelf/
+.idea/tasks.xml
+.idea/usage.statistics.xml
+.idea/dynamic.xml
+.idea/sqlDataSources.xml
+.idea/dataSources/
+.idea/dataSources.local.xml
+.idea/httpRequests/
+.idea/inspectionProfiles/profiles_settings.xml
+.idea/AndroidProjectSystem.xml
+.idea/deploymentTargetSelector.xml
+.idea/deviceManager.xml
+.idea/migrations.xml
+.idea/studiobot.xml
+.idea/copilot/
+.idea/other.xml
+
+# ---- Other editors ----
+.vscode/
+.fleet/
+.project
+.classpath
+.settings/
+*.swp
+*~
+
+# ---- OS files ----
+.DS_Store
+._*
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ---- Lint / test / profiling output ----
+lint-results*.xml
+lint-results*.html
+lint-baseline-tmp.xml
+/reports/
+/test-results/
+*.trace
+*.perfetto-trace
+*.profraw
+
+# ---- Native / misc ----
+.cache/
+*.tmp
+*.bak
+image_payload_4000.json
+meta_model_probe.json
+image_payload.json
+# ---- Python bytecode ----
+__pycache__/
+*.pyc

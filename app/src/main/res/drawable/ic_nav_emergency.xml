@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Material Symbols "emergency" (Apache 2.0) for the Emergency tab.
+     Single fill so it tints through NavigationBarItem's selected/unselected colour. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="960"
+    android:viewportHeight="960">
+    <!-- Material Symbols SVGs use viewBox "0 -960 960 960"; VectorDrawable viewports
+         start at 0, so shift the artwork down into the visible 0..960 range. -->
+    <group android:translateY="960">
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M410,-120v-238L204,-239l-70,-121 206,-120 -206,-119 70,-121 206,119v-239h140v239l206,-119 70,121 -206,119 206,120 -70,121 -206,-119v238H410Z" />
+    </group>
+</vector>

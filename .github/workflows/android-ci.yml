@@ -1,0 +1,186 @@
+name: Android CI
+
+on:
+  # Allows the legacy Android verification workflow to delegate to this maintained workflow.
+  workflow_call:
+  # PRs own verification. Trusted main pushes are verified by android-release.yml;
+  # running this workflow there too would double every build and emulator job.
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build-and-unit-test
+    # Pinned while the ubuntu-latest migration is in flight: verification needs
+    # a known-good runner image, same as the emulator jobs.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: 17
+      # Validates the checked-in Gradle wrapper and caches dependencies.
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+      - name: Verify Play publishing client (no credentials or upload)
+        run: |
+          python3 -m py_compile scripts/play_internal_upload.py
+          python3 -m unittest discover -s tests -p 'test_play_internal_upload.py' -v
+          python3 -m py_compile proxy/server.py
+          python3 -m unittest discover -s proxy -p 'test_server.py' -v
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path(".github/workflows/android-release.yml").read_text()
+          assert "pull_request:" not in p, "Signing or publishing must not run on pull requests"
+          assert "branches: [develop, main, live]" in p, "Publishing must trigger on trusted branch pushes"
+          assert "tags: ['v*']" not in p, "No manual version tag should be required"
+          for ref in ("refs/heads/develop", "refs/heads/main", "refs/heads/live"):
+              assert f"github.ref == '{ref}'" in p, f"Release jobs must gate on {ref}"
+          assert "github.event_name == 'push'" in p, "Releases must require trusted branch pushes"
+          assert "environment: ${{ github.ref == 'refs/heads/live' && 'production' || 'pilot' }}" in p, \
+              "live must use the production environment, develop/main the pilot environment"
+          assert "id-token: write" in p
+          assert "google-github-actions/auth@" in p and "scripts/play_internal_upload.py" in p
+          assert "tracks=production" in p and "tracks=beta" in p and 'tracks="internal alpha"' in p, \
+              "Branches must resolve to production/beta/internal+alpha tracks"
+          s = Path("scripts/play_internal_upload.py").read_text()
+          assert '"production": "refs/heads/live"' in s, "Production track must deploy only from live"
+          assert '"beta": "refs/heads/main"' in s, "Beta track must deploy only from main"
+          assert '"internal": "refs/heads/develop"' in s and '"alpha": "refs/heads/develop"' in s, \
+              "Internal and alpha tracks must deploy only from develop"
+          assert "REVIEW_REQUIRED_TRACKS" in s, "Publisher must gate review-required tracks on the in-review probe"
+          print("Deployment-channels release contract verified; PRs have no signing credentials.")
+          PY
+      - name: Verify screenshots fail the job when missing
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          for name in ("android-ci.yml", "android-release.yml"):
+              w = Path(f".github/workflows/{name}").read_text()
+              # Split literals so this check cannot match itself.
+              head, sep, tail = w.partition("name: play-" + "screenshots")
+              assert sep, f"{name} must keep the play-screenshots upload"
+              step = tail.split("- name:")[0]
+              assert ("if-no-files-found: " + "error") in step, \
+                  f"{name}: screenshot upload must fail the job when no PNGs are found"
+          print("Screenshot artefact is required in both emulator jobs.")
+          PY
+      - name: Verify
+        # bundleRelease is intentionally excluded: the release workflow builds the
+        # versioned bundle once on trusted main. Building it per PR wastes minutes.
+        run: ./gradlew --no-daemon --console=plain testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest
+      - name: Upload reports and unsigned artefacts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: build-reports
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            app/build/reports/
+            app/build/test-results/
+            app/build/outputs/apk/
+            app/build/outputs/bundle/
+
+  instrumented:
+    name: emulator-api-34
+    # Cheapest checks first: a red build skips the emulator boot entirely.
+    # This adds a few minutes of latency to green PRs but never extra cost.
+    needs: build
+    # Pinned while the ubuntu-latest migration is in flight: KVM and disk layout
+    # are image-sensitive and the emulator needs a known-good runner.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      ANDROID_EMU_FORCE_QUICKBOOT_FILE_BACKED: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+      # The default 6 GiB userdata partition needs ~7.4 GB free and the runner
+      # arrives with ~6.5 GB. Remove toolchains this job never uses, before the
+      # AVD exists. Java, Gradle, the Android SDK and the workspace are kept.
+      - name: Free unused runner toolchains before creating the AVD
+        run: |
+          df -h "$HOME"
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/powershell
+          sudo apt-get clean
+          df -h "$HOME"
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      # Runs every instrumented class (RepositoryTest, AiShareAndPermissionsTest, CaptureFlowTest).
+      # API 34 is the supported level; the API 37 Espresso incompatibility is tracked under #7.
+      - name: Instrumented tests
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          # Cap the userdata partition well below the freed disk headroom.
+          disk-size: 4096M
+          disable-animations: true
+          # The emulator stays alive for the whole script, so pull the real
+          # Play-store screenshots the suite saved before the AVD terminates.
+          # The gradle exit code is preserved: test failures must fail this job.
+          script: |
+            ./gradlew --no-daemon --console=plain connectedDebugAndroidTest
+            test_status=$?
+            rm -rf device-shots
+            adb pull "/sdcard/Android/data/app.melosome.claimconnect/files/play-shots" device-shots || echo "Play-shots directory not found on device"
+            if [ -d device-shots ]; then find device-shots -type f | sort; else echo "device-shots missing: pull failed or suite wrote no screenshots"; fi
+            exit $test_status
+      - name: Test summary
+        if: always()
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import glob, xml.etree.ElementTree as ET
+          t = f = e = s = 0
+          for path in glob.glob("app/build/outputs/androidTest-results/connected/**/*.xml", recursive=True):
+              suite = ET.parse(path).getroot()
+              for node in suite.iter("testsuite"):
+                  t += int(node.get("tests", 0)); f += int(node.get("failures", 0))
+                  e += int(node.get("errors", 0)); s += int(node.get("skipped", 0))
+          print(f"Instrumented (API 34): executed={t} failed={f} errors={e} skipped={s}")
+          PY
+      - name: Upload instrumented reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: instrumented-reports
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            app/build/reports/androidTests/
+            app/build/outputs/androidTest-results/
+      # Real screenshots of the running app (synthetic data). adb pull copies
+      # the remote dir's contents flat into device-shots/ when the destination
+      # does not exist, but some platform-tools nest them one level deeper, so
+      # list both patterns: `**/` alone does not match the flat layout.
+      - name: Upload Play-store screenshots
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: play-screenshots
+          retention-days: 30
+          if-no-files-found: error
+          path: |
+            device-shots/*.png
+            device-shots/**/*.png

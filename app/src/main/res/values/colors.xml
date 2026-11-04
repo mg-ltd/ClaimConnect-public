@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- ClaimConnect brand teal, matches ui/Theme.kt's light colour scheme primary
+         (derived from the app icon's true brand seed, #49969D). -->
+    <color name="claim_connect_primary">#006970</color>
+    <!-- True brand teal sampled from the ClaimConnect app icon artwork; backs the adaptive
+         launcher icon so its corners match the foreground art with no visible seam. -->
+    <color name="claim_connect_icon_background">#49969D</color>
+</resources>

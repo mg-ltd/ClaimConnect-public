@@ -1,0 +1,327 @@
+name: Android release to Google Play
+
+# Branch decides the track: main feeds Open Testing (beta), live feeds
+# production. One workflow (one run-number counter) keeps versionCodes
+# monotonic across all tracks. The develop pipeline (Internal Testing and
+# Closed Testing/alpha) is PAUSED: merge all changes to main to run.
+# The production environment must require human reviewers. No release
+# tags or manual promotion are needed.
+# Environment OIDC claim conditions must admit their branch: pilot admits
+# refs/heads/main, production admits refs/heads/live.
+on:
+  push:
+    branches: [main, live]
+
+permissions: {}
+
+concurrency:
+  group: claimconnect-release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: release-verify
+    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/live') && github.event_name == 'push'
+    # Pinned while the ubuntu-latest migration is in flight: release verification
+    # needs a known-good runner image, same as the emulator jobs.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Verify trusted release ref
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == 'refs/heads/main' || "$GITHUB_REF" == 'refs/heads/live' ]] || { echo "::error::Releases require main or live (develop pipeline is paused)"; exit 1; }
+          [[ "$GITHUB_EVENT_NAME" == 'push' ]] || { echo "::error::Only trusted branch pushes can publish"; exit 1; }
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+      # Cache must stay writable on trusted main so later runs reuse it.
+      - name: Validate publisher client (no token)
+        run: python3 -m unittest discover -s tests -p 'test_play_internal_upload.py' -v
+      - name: Unit, lint, build and instrumentation assembly
+        run: ./gradlew --no-daemon --console=plain testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest
+
+  emulator:
+    name: release-emulator-api-34
+    needs: verify
+    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/live') && github.event_name == 'push'
+    # Pinned while the ubuntu-latest migration is in flight: KVM and disk layout
+    # are image-sensitive and the emulator needs a known-good runner.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      # read for checkout, write only to push screenshots to the review branch.
+      contents: write
+    env:
+      ANDROID_EMU_FORCE_QUICKBOOT_FILE_BACKED: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+      # Same disk headroom as the CI emulator job: the default 6 GiB userdata
+      # partition needs ~7.4 GB free and the runner arrives with ~6.5 GB.
+      - name: Free unused runner toolchains before creating the AVD
+        run: |
+          df -h "$HOME"
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/powershell
+          sudo apt-get clean
+          df -h "$HOME"
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Run full instrumentation suite
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          # Cap the userdata partition well below the freed disk headroom.
+          disk-size: 4096M
+          disable-animations: true
+          # Pull the real Play-store screenshots before the AVD terminates.
+          # The gradle exit code is preserved: test failures must fail this job.
+          script: |
+            ./gradlew --no-daemon --console=plain connectedDebugAndroidTest
+            test_status=$?
+            rm -rf device-shots
+            adb pull "/sdcard/Android/data/app.melosome.claimconnect/files/play-shots" device-shots || echo "Play-shots directory not found on device"
+            if [ -d device-shots ]; then find device-shots -type f | sort; else echo "device-shots missing: pull failed or suite wrote no screenshots"; fi
+            exit $test_status
+      # Same counts the CI job prints: makes executed/failed visible without
+      # downloading the artifact (a bare "test(AVD) - 14" line is not a failure count).
+      - name: Test summary
+        if: always()
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import glob, xml.etree.ElementTree as ET
+          t = f = e = s = 0
+          for path in glob.glob("app/build/outputs/androidTest-results/connected/**/*.xml", recursive=True):
+              suite = ET.parse(path).getroot()
+              for node in suite.iter("testsuite"):
+                  t += int(node.get("tests", 0)); f += int(node.get("failures", 0))
+                  e += int(node.get("errors", 0)); s += int(node.get("skipped", 0))
+          print(f"Instrumented (API 34): executed={t} failed={f} errors={e} skipped={s}")
+          PY
+      - name: Upload emulator reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-emulator-reports
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            app/build/reports/androidTests/
+            app/build/outputs/androidTest-results/
+      # adb pull copies the remote dir's contents flat into device-shots/
+      # when the destination does not exist, but some platform-tools nest
+      # them one level deeper, so list both patterns: `**/` alone does not
+      # match the flat layout.
+      - name: Upload Play-store screenshots
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: play-screenshots
+          retention-days: 30
+          if-no-files-found: error
+          path: |
+            device-shots/*.png
+            device-shots/**/*.png
+      # Publishes real screenshots to the ci/play-screenshots review branch so a
+      # human merges them into docs/play-assets. Never main (no release loop),
+      # never on test failure (partial journeys stay out), never failing this
+      # job (publishing must not block the release).
+      - name: Publish screenshots to review branch
+        if: success()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -u
+          publish() {
+            echo "$1"
+            {
+              echo "### Play screenshots"
+              echo "$1"
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+          files=$(find device-shots -name '*.png' 2>/dev/null | sort)
+          count=$(echo "$files" | grep -c . || true)
+          if [ "$count" -lt 2 ]; then publish "Skipped: only $count screenshot(s) pulled."; exit 0; fi
+          check=$(python3 - "$files" <<'PY'
+          import struct, sys
+          bad = []
+          for path in sys.argv[1].split():
+              with open(path, 'rb') as f:
+                  head = f.read(33)
+              if head[12:16] != b'IHDR':
+                  bad.append(path + ' (not PNG)')
+                  continue
+              w, h = struct.unpack('>II', head[16:24])
+              ratio = w / h
+              if not (320 <= w <= 3840 and 320 <= h <= 3840 and abs(ratio - 9/16) < 0.02):
+                  bad.append(f'{path} ({w}x{h})')
+          print('; '.join(bad))
+          PY
+          )
+          if [ -n "$check" ]; then publish "Skipped: spec violations: $check"; exit 0; fi
+          git config user.name "claimconnect-ci"
+          git config user.email "claimconnect-ci@users.noreply.github.com"
+          if git fetch origin ci/play-screenshots:ci/play-screenshots 2>/dev/null; then
+            git checkout ci/play-screenshots
+          else
+            git checkout -b ci/play-screenshots
+          fi
+          mkdir -p docs/play-assets
+          git rm -q docs/play-assets/shot-*.png 2>/dev/null || true
+          n=0
+          for src in $files; do
+            n=$((n + 1))
+            cp "$src" "docs/play-assets/shot-$n-$(basename "$src" .png).png" || { publish "Skipped: copy failed."; exit 0; }
+          done
+          git add docs/play-assets/shot-*.png || { publish "Skipped: git add failed."; exit 0; }
+          if git diff --cached --quiet; then publish "Skipped: screenshots unchanged."; exit 0; fi
+          git commit -q -m "Play screenshots from automated suite ($(date -u +%F))" || { publish "Skipped: commit failed."; exit 0; }
+          git push origin ci/play-screenshots || { publish "Skipped: push failed (branch moved?)"; exit 0; }
+          publish "Published $n screenshots to ci/play-screenshots for review."
+
+  publish-internal:
+    name: sign-aab-and-publish-track
+    needs: [verify, emulator]
+    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/live') && github.event_name == 'push'
+    # Pinned while the ubuntu-latest migration is in flight: signing and publishing
+    # need a known-good runner image, same as the emulator jobs.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: ${{ github.ref == 'refs/heads/live' && 'production' || 'pilot' }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+      - name: Set Play versionCode (unique per new workflow run)
+        shell: bash
+        env:
+          OFFSET: ${{ vars.CC_PLAY_VERSION_CODE_OFFSET }}
+        run: |
+          set -euo pipefail
+          [[ "${OFFSET:-1}" =~ ^[0-9]+$ ]] || { echo "::error::CC_PLAY_VERSION_CODE_OFFSET must be a non-negative integer"; exit 1; }
+          code=$(( GITHUB_RUN_NUMBER + ${OFFSET:-1} ))
+          (( code > 0 && code <= 2100000000 )) || { echo "::error::Invalid Android versionCode"; exit 1; }
+          echo "CC_BUILD_VERSION_CODE=$code" >> "$GITHUB_ENV"
+          echo "Release versionCode=$code (default offset 1 assumes initial manual Play bundle has versionCode 1; set CC_PLAY_VERSION_CODE_OFFSET in pilot if needed)."
+      - name: Resolve Play track from branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == 'refs/heads/live' ]]; then tracks=production
+          elif [[ "$GITHUB_REF" == 'refs/heads/main' ]]; then tracks=beta
+          else echo "::error::Releases require main or live (develop pipeline is paused)"; exit 1; fi
+          echo "CC_PLAY_TRACKS=$tracks" >> "$GITHUB_ENV"
+          echo "Release track(s)=$tracks from $GITHUB_REF."
+      - name: Build the AAB once
+        run: ./gradlew --no-daemon --console=plain bundleRelease
+      - name: Sign AAB with protected pilot upload key and capture provenance
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.CC_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.CC_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.CC_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.CC_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          : "${KEYSTORE_BASE64:?Set CC_KEYSTORE_BASE64 in pilot}"
+          : "${KEYSTORE_PASSWORD:?Set CC_KEYSTORE_PASSWORD in pilot}"
+          : "${KEY_ALIAS:?Set CC_KEY_ALIAS in pilot}"
+          : "${KEY_PASSWORD:?Set CC_KEY_PASSWORD in pilot}"
+          keystore="$RUNNER_TEMP/claimconnect-upload.keystore"
+          trap 'rm -f "$keystore"' EXIT
+          # Pasted secrets arrive mangled: wrapped lines, CRLF, literal \n escapes
+          # (JSON copy-paste) or surrounding quotes — all rejected by GNU base64
+          # with "invalid input". Unwrap escape pairs first, then keep only the
+          # base64 alphabet, so only real corruption fails the decode below.
+          cleaned="$(printf '%s' "$KEYSTORE_BASE64" | sed -e 's/\\n//g' -e 's/\\r//g' | tr -cd 'A-Za-z0-9+/=')"
+          test -n "$cleaned" || { echo "::error::CC_KEYSTORE_BASE64 is empty after removing whitespace"; exit 1; }
+          (umask 077; printf '%s' "$cleaned" | base64 --decode > "$keystore")
+          # Accept either a JKS keystore (magic FE ED FE ED) or a PKCS#12 bundle
+          # (DER SEQUENCE, magic 30 82 ...). jarsigner handles both, but PKCS#12
+          # needs an explicit storetype. Anything else means the secret is
+          # truncated or not a keystore — fail here with a fix hint instead of
+          # a cryptic jarsigner error later.
+          magic="$(od -An -tx1 -N4 "$keystore" | tr -d ' \n')"
+          storetype=()
+          case "$magic" in
+            feedfeed) echo "Keystore format: JKS" ;;
+            3082*) echo "Keystore format: PKCS#12"; storetype=(-storetype pkcs12) ;;
+            *)
+              echo "::error::Decoded CC_KEYSTORE_BASE64 is neither a JKS keystore nor a PKCS#12 bundle (magic=$magic). Re-create the secret from the upload keystore with: base64 -w0 upload-key.jks (Linux) or base64 -i upload-key.jks (macOS), pasted as a single line."
+              exit 1
+              ;;
+          esac
+          aab="app/build/outputs/bundle/release/app-release.aab"
+          test -s "$aab"
+          jarsigner "${storetype[@]}" -keystore "$keystore" -storepass:env KEYSTORE_PASSWORD -keypass:env KEY_PASSWORD "$aab" "$KEY_ALIAS"
+          jarsigner -verify "$aab"
+          cp "$aab" signed-release.aab
+          {
+            echo "commit=$GITHUB_SHA"
+            echo "versionCode=$CC_BUILD_VERSION_CODE"
+            echo "package=app.melosome.claimconnect"
+            echo "tracks=$CC_PLAY_TRACKS"
+            echo "aab_sha256=$(sha256sum signed-release.aab | cut -d' ' -f1)"
+          } > release-metadata.txt
+      - name: Retain signed AAB and build metadata
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: signed-play-aab
+          retention-days: 30
+          if-no-files-found: error
+          path: |
+            signed-release.aab
+            release-metadata.txt
+      - name: Verify GitHub OIDC and exchange for Play publisher access token
+        id: google-auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/androidpublisher
+          create_credentials_file: false
+      - name: Upload signed AAB and publish to Play track(s)
+        env:
+          CC_PLAY_ACCESS_TOKEN: ${{ steps.google-auth.outputs.access_token }}
+          CC_SIGNED_AAB: signed-release.aab
+          CC_PACKAGE: app.melosome.claimconnect
+        run: |
+          set -euo pipefail
+          for track in $CC_PLAY_TRACKS; do
+            echo "Publishing track $track"
+            CC_PLAY_TRACK="$track" python3 scripts/play_internal_upload.py
+          done
+      - name: Record track result
+        run: |
+          {
+            echo "### Google Play $CC_PLAY_TRACKS"
+            echo "- Commit: \`$GITHUB_SHA\`"
+            echo "- Version code: $CC_BUILD_VERSION_CODE"
+            echo "- Track(s): \`$CC_PLAY_TRACKS\`"
+            echo "- Per-track lines above show published / already-serving / SKIPPED (in review); confirm status in Play Console"
+          } >> "$GITHUB_STEP_SUMMARY"

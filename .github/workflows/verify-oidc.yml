@@ -1,0 +1,106 @@
+name: Verify Play publisher OIDC
+
+# Untrusted PRs validate this workflow's security contract without requesting any cloud token.
+# Real OIDC exchange runs only on reviewed pushes to trusted main, in protected pilot.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/verify-oidc.yml
+  # Push runs only when trust-relevant files change; otherwise every main
+  # merge would spend a runner re-proving what the release job already proves.
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/verify-oidc.yml
+      - .github/workflows/android-release.yml
+      - scripts/play_internal_upload.py
+      - tests/test_play_internal_upload.py
+
+permissions: {}
+
+concurrency:
+  group: verify-play-oidc-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    name: oidc-workflow-contract
+    # Superseded PR pushes cancel here; the live token exchange below never cancels.
+    concurrency:
+      group: verify-play-oidc-contract-${{ github.ref }}
+      cancel-in-progress: true
+    # Pinned while the ubuntu-latest migration is in flight: the trust-boundary
+    # check needs a known-good runner image, same as the emulator jobs.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check trusted-execution and credential boundary
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          text = Path(".github/workflows/verify-oidc.yml").read_text()
+          required = [
+              "github.ref == 'refs/heads/main'",
+              "environment: pilot",
+              "id-token: write",
+              "workload_identity_provider: " + "$" + "{{ vars.GCP_WIF_PROVIDER }}",
+              "service_account: " + "$" + "{{ vars.GCP_SERVICE_ACCOUNT }}",
+              "token_format: access_token",
+              "access_token_scopes: https://www.googleapis.com/auth/androidpublisher",
+              "google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093",
+              "create_credentials_file: false",
+          ]
+          for marker in required:
+              if marker not in text:
+                  raise SystemExit(f"OIDC workflow contract is missing: {marker}")
+          if ("credentials" + "_json:") in text or ("secrets." + "CC_") in text:
+              raise SystemExit("OIDC smoke test must not access long-lived keys or Android signing secrets")
+          print("OIDC trust-boundary contract is present; LIVE authentication is deferred to trusted main.")
+          PY
+
+  oidc-smoke:
+    name: oidc-token-exchange
+    needs: contract
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    # Pinned while the ubuntu-latest migration is in flight: the live token
+    # exchange needs a known-good runner image, same as the emulator jobs.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: pilot
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Verify publisher identity identifiers (without displaying values)
+        env:
+          WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+          SERVICE_ACCOUNT: ${{ vars.GCP_SERVICE_ACCOUNT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$WIF_PROVIDER" =~ ^projects/[0-9]+/locations/global/workloadIdentityPools/[a-zA-Z0-9_-]+/providers/[a-zA-Z0-9_-]+$ ]] || { echo "::error::Set GCP_WIF_PROVIDER in pilot (full projects/<NUMBER>/locations/global/... path)"; exit 1; }
+          [[ "$SERVICE_ACCOUNT" =~ ^[a-zA-Z0-9._+-]+@[a-zA-Z0-9.-]+\.iam\.gserviceaccount\.com$ ]] || { echo "::error::Set GCP_SERVICE_ACCOUNT in pilot (service account email)"; exit 1; }
+      - name: Exchange GitHub OIDC for Google Play-scoped service-account token
+        id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/androidpublisher
+          create_credentials_file: false
+      - name: Assert short-lived token was minted (never print it)
+        shell: bash
+        env:
+          ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: |
+          set -euo pipefail
+          test -n "$ACCESS_TOKEN"
+          echo "PASS: GitHub OIDC federation and Google service-account impersonation succeeded."
+          echo "Play Console app permissions and AAB upload are NOT tested by this job."
